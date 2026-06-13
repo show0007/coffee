@@ -569,10 +569,11 @@
                 alert('已清除已儲存的 PASSKEY');
             };
 
-            const syncToCloud = async () => {
+            const syncToCloud = async (isAuto = false) => {
                 if (!CLOUD_URL || CLOUD_URL.includes("請把部署")) return alert("請先配置 CLOUD_URL");
                 
                 if (!passkey.value) {
+                    if (isAuto) return; // 自動同步時若無密碼則跳過
                     const input = prompt("請輸入雲端同步 PASSKEY:");
                     if (!input) return;
                     passkey.value = input;
@@ -597,19 +598,29 @@
                     if (json.status === "success") { 
                         localStorage.setItem('coffee_erp_passkey', passkey.value);
                         syncStatus.value = 'success'; 
-                        alert("☁️ 資料已成功保存至雲端！"); 
+                        if (!isAuto) alert("☁️ 資料已成功保存至雲端！"); 
                     } else { 
                         syncStatus.value = 'error'; 
                         if (json.message === "Unauthorized") {
                             localStorage.removeItem('coffee_erp_passkey');
                             passkey.value = '';
-                            alert("⚠️ 密碼錯誤，請重新輸入");
+                            if (!isAuto) alert("⚠️ 密碼錯誤，請重新輸入");
                         } else {
-                            alert("⚠️ 雲端儲存失敗：" + (json.message || "未知錯誤")); 
+                            if (!isAuto) alert("⚠️ 雲端儲存失敗：" + (json.message || "未知錯誤")); 
                         }
                     }
-                } catch (err) { syncStatus.value = 'error'; alert("🚨 連線失敗：" + err.message); }
+                } catch (err) { 
+                    syncStatus.value = 'error'; 
+                    if (!isAuto) alert("🚨 連線失敗：" + err.message); 
+                }
             };
+
+            // 自動同步設定 (每 5 分鐘)
+            setInterval(() => {
+                if (storageMode.value === 'cloud' && localStorage.getItem('coffee_erp_passkey')) {
+                    syncToCloud(true);
+                }
+            }, 300000);
 
             const syncFromCloud = async () => {
                 if (!CLOUD_URL || CLOUD_URL.includes("請把部署")) return alert("請先配置 CLOUD_URL");
