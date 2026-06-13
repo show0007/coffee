@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>精品咖啡烘焙 ERP 旗艦版 - 重量配方與 QC 紀錄 (安全穩定雙軌版)</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-100 p-4 font-sans md:p-8">
+
+<div id="app" class="max-w-7xl mx-auto space-y-8">
+    
+    <!-- 儲存模式與手動同步區 -->
+    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
+        <div class="flex items-center gap-3">
+            <span class="text-xs font-bold text-slate-700"><i class="fas fa-database text-amber-700"></i> 儲存模式：</span>
+            <div class="bg-slate-100 p-1 rounded-xl flex gap-1 text-xs font-bold">
+                <button @click="changeStorageMode('local')" :class="storageMode === 'local' ? 'bg-blue-600 text-white shadow' : 'text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg transition-all flex items-center gap-1">
+                    <i class="fas fa-hdd"></i> 在地儲存 (LocalStorage)
+                </button>
+                <button @click="changeStorageMode('cloud')" :class="storageMode === 'cloud' ? 'bg-amber-800 text-white shadow' : 'text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg transition-all flex items-center gap-1">
+                    <i class="fas fa-cloud"></i> 雲端同步 (Google試算表)
+                </button>
+            </div>
+        </div>
+        <div class="flex items-center gap-3 text-xs font-bold">
+            <div v-if="storageMode === 'cloud'" class="flex gap-2">
+                <button @click="syncToCloud" :disabled="syncStatus === 'loading'" class="text-[11px] bg-amber-50 hover:bg-amber-100 text-amber-900 px-2.5 py-1.5 rounded-xl border border-amber-200 transition flex items-center gap-1 shadow-sm disabled:opacity-50">
+                    <i class="fas fa-cloud-upload-alt text-amber-700"></i> 手動上傳資料到雲端
+                </button>
+                <button @click="syncFromCloud" :disabled="syncStatus === 'loading'" class="text-[11px] bg-slate-50 hover:bg-slate-200 px-2.5 py-1.5 rounded-xl border text-slate-700 transition flex items-center gap-1 shadow-sm disabled:opacity-50">
+                    <i class="fas fa-cloud-download-alt text-amber-700"></i> 從雲端下載最新資料
+                </button>
+                <button @click="clearPasskey" class="text-[10px] bg-rose-50 text-rose-700 px-2 py-1 rounded-xl border border-rose-200 hover:bg-rose-100 transition flex items-center gap-1">
+                    <i class="fas fa-trash-alt"></i> 清除密碼
+                </button>
+            </div>
+            <span v-if="syncStatus === 'loading'" class="text-blue-600 flex items-center gap-1"><i class="fas fa-spinner fa-spin"></i> 雲端處理中...</span>
+            <span v-else-if="syncStatus === 'success'" class="text-emerald-600 flex items-center gap-1"><i class="fas fa-check-circle"></i> 同步成功</span>
+            <span v-else-if="syncStatus === 'error'" class="text-rose-600 flex items-center gap-1"><i class="fas fa-exclamation-triangle"></i> 雲端連線失敗 (已安全存於本機)</span>
+            <span v-else class="text-slate-400">目前狀態：穩定執行中 (本機已存檔)</span>
+        </div>
+    </div>
+
+    <header class="bg-gradient-to-r from-amber-900 to-stone-950 p-6 rounded-2xl shadow-xl text-white flex flex-col md:flex-row justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-black tracking-tight flex items-center gap-3">
+                <i class="fas fa-balance-scale text-amber-400"></i> 精品咖啡烘焙 ERP 旗艦重量版
+            </h1>
+            <p class="text-amber-200 mt-1 text-xs">目前狀態：<span class="underline font-bold text-white">{{ storageMode === 'cloud' ? '☁️ 雲端同步模式' : '💾 本機在地儲存' }}</span> | 具備抓料異常動態診斷提示功能</p>
+        </div>
+        <div class="mt-4 md:mt-0 flex flex-wrap items-center gap-2">
+            <button @click="exportBackup" class="bg-amber-700/80 hover:bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold border border-amber-600 transition-all flex items-center gap-1 shadow">
+                <i class="fas fa-download"></i> 匯出系統備份檔
+            </button>
+            <button @click="triggerFileInput" class="bg-stone-800 hover:bg-stone-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold border border-stone-600 transition-all flex items-center gap-1 shadow">
+                <i class="fas fa-upload"></i> 匯入系統備份檔
+            </button>
+            <input type="file" ref="fileInput" @change="importBackup" accept=".json" class="hidden">
+        </div>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        <!-- 左側：生豆與配方管理 -->
+        <div class="lg:col-span-1 space-y-8">
+            <!-- 生豆庫存 -->
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-base font-bold text-slate-800 mb-1 flex items-center gap-2">
+                    <i class="fas fa-warehouse text-amber-600"></i> 🫘 生豆現有庫存
+                </h2>
+                <div class="space-y-3 max-h-[250px] overflow-y-auto pr-1 mb-4">
+                    <div v-for="(bean, index) in greenStock" :key="bean.name" 
+                         class="p-3 rounded-xl border relative flex justify-between items-center" 
+                         :class="Number(bean.stock) <= Number(bean.safetyLimit) ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-100'">
+                        <div>
+                            <div class="font-bold text-xs text-slate-700 truncate max-w-[150px]">{{ bean.name }}</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">進價: {{ bean.price }} 元/kg</div>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-base font-black text-slate-800">
+                                {{ (Number(bean.stock) || 0).toFixed(2) }} <span class="text-[10px] font-normal text-slate-400">kg</span>
+                            </span>
+                            <button @click="deleteBean(index)" class="text-slate-300 hover:text-rose-500 ml-2 text-xs">×</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-slate-50 p-3 rounded-xl border border-dashed space-y-2 text-xs">
+                    <input v-model.trim="newBean.name" placeholder="生豆名稱" class="w-full px-2 py-1 border rounded bg-white">
+                    <div class="grid grid-cols-3 gap-2">
+                        <div>
+                            <label class="block text-[9px] text-slate-400 mb-0.5">初始庫存(kg)</label>
+                            <input v-model.number="newBean.stock" type="number" step="0.01" class="w-full px-2 py-1 border rounded bg-white text-center">
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-slate-400 mb-0.5">每kg進價(元)</label>
+                            <input v-model.number="newBean.price" type="number" class="w-full px-2 py-1 border rounded bg-white text-center">
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-slate-400 mb-0.5">安全警示(kg)</label>
+                            <input v-model.number="newBean.safetyLimit" type="number" class="w-full px-2 py-1 border rounded bg-white text-center">
+                        </div>
+                    </div>
+                    <button @click="addBean" class="w-full bg-slate-800 text-white py-1 rounded font-bold hover:bg-slate-700">新增生豆</button>
+                </div>
+            </div>
+
+            <!-- 配方設定 -->
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-base font-bold text-slate-800 mb-2 flex items-center gap-2">
+                    <i class="fas fa-blender text-amber-600"></i> 🧪 配方實體重量設定
+                </h2>
+                <div class="space-y-4 max-h-[350px] overflow-y-auto pr-1 mb-4">
+                    <div v-for="(blend, bIdx) in blends" :key="blend.name" class="p-3 bg-amber-50/40 rounded-xl border border-amber-100/70 relative">
+                        <button @click="deleteBlend(bIdx)" class="absolute top-2 right-2 text-slate-400 hover:text-rose-500 text-xs">×</button>
+                        <div class="font-bold text-xs text-amber-900 mb-1">{{ blend.name }}</div>
+                        <div class="text-[10px] text-amber-700/70 mb-1">配方基準總重：{{ (Number(blend.baseTotalKg) || 0).toFixed(3) }} kg</div>
+                        <div class="space-y-1 text-[11px] text-slate-600 border-t border-amber-900/10 pt-1">
+                            <div v-for="item in blend.ingredients" :key="item.beanName" class="flex justify-between">
+                                <span class="truncate max-w-[140px]">• {{ item.beanName }}</span>
+                                <span class="font-mono font-bold text-stone-700">{{ item.amount }} {{ item.unit }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-amber-50/50 p-3 rounded-xl border border-amber-100 text-xs space-y-2">
+                    <input v-model.trim="newBlend.name" placeholder="配方名稱 (如：義式經典)" class="w-full px-2 py-1 border rounded bg-white font-bold">
+                    <div v-for="(ing, idx) in newBlend.ingredients" :key="idx" class="grid grid-cols-12 gap-1 items-center">
+                        <select v-model="ing.beanName" class="col-span-6 p-1 border rounded bg-white text-[11px]">
+                            <option value="" disabled>選擇生豆</option>
+                            <option v-for="b in greenStock" :value="b.name">{{b.name}}</option>
+                        </select>
+                        <input v-model.number="ing.amount" type="number" placeholder="重量" class="col-span-3 p-1 border rounded text-center bg-white">
+                        <select v-model="ing.unit" class="col-span-2 p-1 border rounded bg-white text-center text-[10px]">
+                            <option value="g">g</option><option value="kg">kg</option>
+                        </select>
+                        <button @click="newBlend.ingredients.splice(idx, 1)" class="col-span-1 text-rose-500 text-center font-bold">×</button>
+                    </div>
+                    <div class="flex gap-2 pt-1">
+                        <button @click="newBlend.ingredients.push({ beanName: '', amount: 0, unit: 'g' })" class="flex-1 bg-white border border-amber-300 text-amber-800 py-1 rounded font-bold hover:bg-amber-50">＋加豆款</button>
+                        <button @click="addBlend" class="flex-1 bg-amber-700 text-white py-1 rounded font-bold hover:bg-amber-800">儲存配方檔</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側：烘焙控制面板 -->
+        <div class="lg:col-span-2 space-y-8">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-2 border-b border-slate-100 pb-2">
+                    <i class="fas fa-fire-burner text-amber-600"></i> 🤝 烘焙生產與 QC 參數紀錄面板
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">🤝 客戶名稱</label>
+                        <input type="text" v-model.trim="form.customerName" placeholder="例如：某某咖啡店" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">📌 客戶標籤/備註</label>
+                        <input type="text" v-model.trim="form.customerTag" placeholder="例如：批發" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">👑 預期焙度</label>
+                        <select v-model="form.roastLevel" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-white">
+                            <option>淺焙</option><option>淺中焙</option><option>中焙</option><option>中深焙</option><option>深焙</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="bg-slate-50 p-4 rounded-xl border border-slate-200/60 mb-4 space-y-4">
+                    <div class="flex gap-4 border-b border-slate-200 pb-2">
+                        <label class="flex items-center gap-1.5 text-xs font-bold text-slate-700 cursor-pointer">
+                            <input type="radio" value="single" v-model="form.mode" class="text-amber-700"> 🪵 單品豆模式
+                        </label>
+                        <label class="flex items-center gap-1.5 text-xs font-bold text-slate-700 cursor-pointer">
+                            <input type="radio" value="blend" v-model="form.mode" class="text-amber-700"> 🧪 重量配方扣抵模式
+                        </label>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div v-if="form.mode === 'single'">
+                            <label class="block text-[11px] font-bold text-slate-500 mb-1">選擇使用的單品豆</label>
+                            <select v-model="form.selectedBeanName" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white">
+                                <option value="" disabled>-- 請選擇倉庫單品豆 --</option>
+                                <option v-for="b in greenStock" :value="b.name">{{ b.name }} (剩: {{(Number(b.stock) || 0).toFixed(2)}} kg)</option>
+                            </select>
+                        </div>
+                        <div class="col-span-1" v-else>
+                            <label class="block text-[11px] font-bold text-slate-500 mb-1">選擇設定好的實體重量配方</label>
+                            <select v-model="form.selectedBlendName" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white">
+                                <option value="" disabled>-- 請選擇重量配方檔 --</option>
+                                <option v-for="b in blends" :value="b.name">{{ b.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-bold text-slate-500 mb-1">⚖️ 本次下鍋生豆「總重量」 (kg)</label>
+                            <input type="number" step="0.01" v-model="form.weight" placeholder="預計生產的總公斤數 (例如 5)" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-black text-amber-900">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-amber-50/30 p-4 rounded-xl border border-amber-900/10 mb-4">
+                    <div class="text-xs font-bold text-amber-900 mb-2.5 flex items-center gap-1">
+                        <i class="fas fa-chart-line"></i> 烘焙品質控管參數 (QC Log)
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-600 mb-1">⏱️ 一爆後發展時間</label>
+                            <input type="text" v-model.trim="form.qcDevelopmentSeconds" placeholder="例如：1分15秒" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-600 mb-1">🌡️ 下豆溫度 (°C)</label>
+                            <input type="text" v-model.trim="form.qcDropTemperature" placeholder="例如：213.5" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 🚀 診斷級修正版：即時計算預覽區塊（支援錯誤追蹤紅字提示） -->
+                <div v-if="previewCostDetails" class="mb-4 p-4 bg-stone-900 text-stone-200 rounded-xl text-xs space-y-2">
+                    <div class="font-bold text-amber-400 flex items-center gap-1">
+                        <i class="fas fa-calculator"></i> 現場抓料配重與庫存扣抵預覽：
+                    </div>
+                    
+                    <!-- 🚨 新增：如果算式或勾稽發生錯誤，以顯眼的紅字顯示原因 -->
+                    <div v-if="previewCostDetails.errorMsg" class="bg-rose-950/80 border border-rose-800 text-rose-300 p-3 rounded-lg text-xs font-bold flex items-center gap-2 my-1">
+                        <i class="fas fa-exclamation-circle text-rose-400 text-sm"></i>
+                        <span>抓料計算中斷：{{ previewCostDetails.errorMsg }}</span>
+                    </div>
+
+                    <div v-else-if="previewCostDetails.list.length === 0" class="text-stone-400 italic py-2 text-center text-[11px]">
+                        請選擇豆款或配方檔，並輸入下鍋重量開始即時計算。
+                    </div>
+
+                    <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] border-b border-stone-800 pb-2">
+                        <div v-for="p in previewCostDetails.list" class="bg-stone-800 p-2 rounded border border-stone-700/50">
+                            <div class="font-bold text-white truncate">{{ p.name }}</div>
+                            <div class="text-amber-300 font-bold mt-0.5">
+                                應稱重量: {{ p.w >= 1 ? p.w.toFixed(2) + ' kg' : (p.w * 1000).toFixed(0) + ' g' }}
+                            </div>
+                            <div class="text-stone-400 text-[10px]">該項成本: {{ p.cost }} 元 (單價: {{p.unitPrice}}元/kg)</div>
+                        </div>
+                    </div>
+                    <div class="text-right font-medium text-stone-300 text-[11px]">
+                        本次生產預計消耗生豆總金額：<span class="text-base font-black text-amber-400 ml-1">{{ previewCostDetails.totalCost }}</span> 元
+                    </div>
+                </div>
+
+                <button @click="executeBaking" class="w-full bg-gradient-to-r from-amber-700 to-amber-800 text-white py-3 rounded-xl font-black text-xs tracking-wider hover:from-amber-800 hover:to-amber-950 transition-all shadow-md">
+                    <i class="fas fa-check-circle mr-1"></i> 寫入生產履歷並自動依重量比例扣抵庫存
+                </button>
+            </div>
+
+            <!-- 歷史履歷庫 -->
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b border-slate-100 pb-3 gap-2">
+                    <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                        <i class="fas fa-history text-amber-800"></i> 📜 歷史營運與客戶生產履歷庫
+                    </h2>
+                    <div class="flex gap-2 text-xs">
+                        <button @click="exportCSV" class="bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg font-bold hover:bg-slate-200">匯出 CSV</button>
+                        <button @click="clearHistory" class="bg-rose-50 text-rose-600 px-3 py-1.5 rounded-lg font-bold hover:bg-rose-100">清空紀錄</button>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 text-[11px]">
+                                <th class="p-3">時間/批號</th>
+                                <th class="p-3">🤝 客戶資料</th>
+                                <th class="p-3">🫘 烘焙豆款明細</th>
+                                <th class="p-3">⚖️ 總重量</th>
+                                <th class="p-3">🎯 烘焙 QC 參數</th>
+                                <th class="p-3">💰 生豆成本</th>
+                                <th class="p-3 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100 text-slate-600">
+                            <tr v-for="(item, idx) in history" :key="item.id" class="hover:bg-slate-50/50">
+                                <td class="p-3 font-mono text-[10px]">
+                                    <div class="font-semibold text-slate-700">{{ item.timestamp }}</div>
+                                    <div class="text-slate-400">{{ item.id }}</div>
+                                </td>
+                                <td class="p-3">
+                                    <span class="font-bold text-slate-900 block">{{ item.customerName }}</span>
+                                    <span class="bg-slate-100 text-slate-500 px-1.5 py-0.2 rounded text-[10px] inline-block mt-0.5">{{ item.customerTag || '常客' }}</span>
+                                </td>
+                                <td class="p-3">
+                                    <div class="font-semibold text-amber-900">{{ item.displayName }}</div>
+                                    <div class="text-[10px] text-slate-400 truncate max-w-[200px]">{{ item.detailSummary }}</div>
+                                </td>
+                                <td class="p-3 font-bold text-slate-800 font-mono">{{ (Number(item.weight) || 0).toFixed(2) }} kg</td>
+                                <td class="p-3">
+                                    <div class="flex flex-col gap-0.5 text-[11px]">
+                                        <span>發展: <span class="font-bold text-amber-800">{{ item.qcSeconds || '未填' }}</span></span>
+                                        <span>下豆: <span class="font-bold text-rose-700">{{ item.qcTemp ? item.qcTemp + '°C' : '未填' }}</span></span>
+                                    </div>
+                                </td>
+                                <td class="p-3 font-black text-slate-900 font-mono">{{ item.costAmount }} 元</td>
+                                <td class="p-3 text-center">
+                                    <button @click="deleteHistory(idx)" class="text-slate-300 hover:text-rose-600"><i class="fas fa-trash"></i></button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+    const CLOUD_URL = "https://script.google.com/macros/s/AKfycbxy23cbc4gWLRfCBvpJRuKT1PIHm4nwbSeF7VPGGXuW-1C-BZzpFGfVwqPUfxEYN95X/exec";
+
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+        setup() {
+            const fileInput = ref(null);
+            const storageMode = ref('local'); 
+            const syncStatus = ref('idle');
+
+            const greenStock = ref([
+                { name: '哥倫比亞 琥珀莊園', stock: 50.00, price: 320, safetyLimit: 5 },
+                { name: '衣索比亞 耶加雪菲', stock: 30.00, price: 450, safetyLimit: 5 },
+                { name: '巴西 喜拉朵', stock: 60.00, price: 210, safetyLimit: 10 }
+            ]);
+
+            const blends = ref([
+                {
+                    name: '招牌黃金曼巴配方(1kg配重)',
+                    baseTotalKg: 1.0,
+                    ingredients: [
+                        { beanName: '哥倫比亞 琥珀莊園', amount: 500, unit: 'g' },
+                        { beanName: '巴西 喜拉朵', amount: 500, unit: 'g' }
+                    ]
+                }
+            ]);
+
+            const history = ref([]);
+            const newBean = ref({ name: '', stock: 0, price: 0, safetyLimit: 5 });
+            const newBlend = ref({ name: '', ingredients: [{ beanName: '', amount: 0, unit: 'g' }] });
+
+            const form = ref({
+                customerName: '', customerTag: '', roastLevel: '中焙',
+                mode: 'single', selectedBeanName: '', selectedBlendName: '', weight: '',
+                qcDevelopmentSeconds: '', qcDropTemperature: ''
+            });
+
+            // 標準化名字比對工具函數 (移除頭尾空白、不分大小寫)
+            const cleanName = (str) => String(str || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+            const triggerFileInput = () => { fileInput.value.click(); };
+
+            const exportBackup = () => {
+                const backupData = { version: "v8-diagnose-backup", exportTime: new Date().toISOString(), greenStock: greenStock.value, blends: blends.value, history: history.value };
+                const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute("download", `咖啡烘焙ERP_雙軌完整備份_${new Date().toISOString().slice(0,10)}.json`);
+                link.click();
+            };
+
+            const importBackup = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const imported = JSON.parse(e.target.result);
+                        if (!imported.greenStock || !imported.blends || !imported.history) return alert("格式不正確");
+                        if (confirm("確定以檔案完全覆蓋目前系統資料？")) {
+                            greenStock.value = imported.greenStock; 
+                            blends.value = imported.blends; 
+                            history.value = imported.history;
+                            triggerSave();
+                            alert("🎉 檔案備份還原匯入成功！");
+                        }
+                    } catch (err) { alert("讀取錯誤"); }
+                    event.target.value = "";
+                };
+                reader.readAsText(file);
+            };
+
+            const addBean = () => {
+                const nameClean = newBean.value.name.trim();
+                if (!nameClean) return alert('請輸入生豆名稱');
+                if (greenStock.value.some(b => cleanName(b.name) === cleanName(nameClean))) return alert('此生豆名稱已存在');
+                
+                greenStock.value.push({
+                    name: nameClean,
+                    stock: Number(newBean.value.stock) || 0,
+                    price: Number(newBean.value.price) || 0,
+                    safetyLimit: Number(newBean.value.safetyLimit) || 0
+                });
+                newBean.value = { name: '', stock: 0, price: 0, safetyLimit: 5 };
+                triggerSave();
+            };
+
+            const deleteBean = (idx) => {
+                if(confirm('確定移除此生豆庫存？')) { greenStock.value.splice(idx, 1); triggerSave(); }
+            };
+
+            const addBlend = () => {
+                const b = newBlend.value;
+                const blendNameClean = b.name.trim();
+                if (!blendNameClean) return alert('請輸入配方名稱');
+                if (!b.ingredients || b.ingredients.length === 0) return alert('請至少加入一種豆款');
+                if (b.ingredients.some(i => !i.beanName || Number(i.amount) <= 0)) return alert('請確認成分與重量均正確輸入');
+                
+                let totalKg = 0;
+                const standardIngredients = b.ingredients.map(i => {
+                    const amt = Number(i.amount) || 0;
+                    totalKg += i.unit === 'g' ? (amt / 1000) : amt;
+                    return { beanName: i.beanName.trim(), amount: amt, unit: i.unit };
+                });
+                
+                blends.value.push({ name: blendNameClean, baseTotalKg: totalKg, ingredients: standardIngredients });
+                newBlend.value = { name: '', ingredients: [{ beanName: '', amount: 0, unit: 'g' }] };
+                triggerSave();
+                alert('重量配方基準檔建立完畢！');
+            };
+
+            const deleteBlend = (idx) => {
+                if (confirm('確定移除此配方檔？')) { blends.value.splice(idx, 1); triggerSave(); }
+            };
+
+            // 🛠️ 診斷與優化計算算式：支援錯誤原因紅字回報
+            const previewCostDetails = computed(() => {
+                const f = form.value;
+                const weightNum = Number(f.weight) || 0;
+                let list = [];
+                let errorMsg = ""; // 儲存錯誤訊息原因
+
+                if (f.mode === 'single') {
+                    if (!f.selectedBeanName) return { list: [], totalCost: 0, errorMsg: "" };
+                    const target = greenStock.value.find(b => cleanName(b.name) === cleanName(f.selectedBeanName));
+                    
+                    if (!target) {
+                        errorMsg = `在倉庫中找不到名為「${f.selectedBeanName}」的單品生豆，請確認庫存清單。`;
+                    } else {
+                        const bPrice = Number(target.price) || 0;
+                        if (bPrice <= 0) errorMsg = `警告：生豆「${target.name}」的每公斤進價設定為 0 元。`;
+                        list.push({ 
+                            name: target.name, 
+                            w: weightNum, 
+                            unitPrice: bPrice,
+                            cost: Math.round(weightNum * bPrice) 
+                        });
+                    }
+                } else {
+                    if (!f.selectedBlendName) return { list: [], totalCost: 0, errorMsg: "" };
+                    const targetBlend = blends.value.find(b => cleanName(b.name) === cleanName(f.selectedBlendName));
+                    
+                    if (!targetBlend) {
+                        errorMsg = `找不到選擇的配方檔「${f.selectedBlendName}」。`;
+                    } else {
+                        // 1. 動態重新校準配方基準總公斤重
+                        let baseTotalKg = 0;
+                        targetBlend.ingredients.forEach(i => {
+                            const amt = Number(i.amount) || 0;
+                            baseTotalKg += i.unit === 'g' ? (amt / 1000) : amt;
+                        });
+
+                        if (baseTotalKg === 0) {
+                            errorMsg = `此配方的基準總重量計算為 0 kg，請檢查配方設定。`;
+                        } else {
+                            const ratio = weightNum / baseTotalKg;
+                            
+                            // 2. 遍歷成分計算，進行防呆偵測
+                            for (let ing of targetBlend.ingredients) {
+                                const bean = greenStock.value.find(b => cleanName(b.name) === cleanName(ing.beanName));
+                                
+                                if (!bean) {
+                                    errorMsg = `配方成分中的「${ing.beanName}」與倉庫現有生豆名稱不符合(可能存在多餘空白或字元錯漏)，導致單價無法抓取。`;
+                                    list = []; // 清空防止錯誤結果輸出
+                                    break;
+                                }
+                                
+                                const currentBeanPrice = Number(bean.price) || 0;
+                                const ingAmount = Number(ing.amount) || 0;
+                                const ingBaseKg = ing.unit === 'g' ? (ingAmount / 1000) : ingAmount;
+                                
+                                const neededW = ingBaseKg * ratio; 
+                                const itemCost = Math.round(neededW * currentBeanPrice);
+                                
+                                list.push({ 
+                                    name: bean.name, // 統一採用庫存的標準名稱
+                                    w: Number(neededW.toFixed(4)), 
+                                    unitPrice: currentBeanPrice,
+                                    cost: itemCost 
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                const totalCost = list.reduce((sum, item) => sum + item.cost, 0);
+                return { list, totalCost, errorMsg };
+            });
+
+            const executeBaking = () => {
+                const f = form.value;
+                const weightNum = Number(f.weight) || 0;
+                if (!f.customerName) return alert('請輸入客戶名稱');
+                if (weightNum <= 0) return alert('請輸入有效的下鍋生豆總重量(kg)');
+                
+                const pc = previewCostDetails.value;
+                if (pc.errorMsg) return alert(`無法執行生產！請先修正計算異常：\n${pc.errorMsg}`);
+                if (!pc || pc.list.length === 0) return alert('請選擇品項與配方');
+
+                for (let req of pc.list) {
+                    const stockBean = greenStock.value.find(b => cleanName(b.name) === cleanName(req.name));
+                    if (!stockBean || Number(stockBean.stock) < req.w) {
+                        return alert(`庫存不足！\n「${req.name}」需要 ${req.w.toFixed(2)} kg，目前倉庫僅剩 ${(stockBean ? Number(stockBean.stock) : 0).toFixed(2)} kg`);
+                    }
+                }
+
+                pc.list.forEach(req => {
+                    const stockBean = greenStock.value.find(b => cleanName(b.name) === cleanName(req.name));
+                    if (stockBean) stockBean.stock = Number((Number(stockBean.stock) - req.w).toFixed(4));
+                });
+
+                const now = new Date();
+                const timestamp = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+                const detailStr = pc.list.map(l => l.w >= 1 ? `${l.name}(${l.w.toFixed(2)}kg)` : `${l.name}(${(l.w*1000).toFixed(0)}g)`).join(', ');
+
+                history.value.unshift({
+                    id: 'BATCH-' + now.getTime().toString().slice(-6), timestamp,
+                    customerName: f.customerName, customerTag: f.customerTag, roastLevel: f.roastLevel,
+                    displayName: f.mode === 'single' ? '[單品] ' + f.selectedBeanName : '[配方] ' + f.selectedBlendName,
+                    detailSummary: detailStr, weight: weightNum, costAmount: pc.totalCost,
+                    qcSeconds: f.qcDevelopmentSeconds, qcTemp: f.qcDropTemperature,
+                });
+
+                alert(`🎉 生產與 QC 履歷成功存檔！`);
+                f.weight = ''; f.qcDevelopmentSeconds = ''; f.qcDropTemperature = '';
+                triggerSave(); 
+            };
+
+            const deleteHistory = (idx) => {
+                if(confirm('確定刪除此履歷？')) { history.value.splice(idx, 1); triggerSave(); }
+            };
+
+            const clearHistory = () => { if(confirm('確定清空歷史？')) { history.value = []; triggerSave(); } };
+
+            const exportCSV = () => {
+                if (history.value.length === 0) return alert('無資料可匯出');
+                let csv = "\uFEFF時間,批號,客戶,標籤,焙度,品項,成份抓料明細,總重(kg),一爆發展,下豆溫(°C),生豆成本(元)\n";
+                history.value.forEach(h => { csv += `${h.timestamp},${h.id},${h.customerName},${h.customerTag||''},${h.roastLevel},${h.displayName},"${h.detailSummary}",${h.weight},${h.qcSeconds||''},${h.qcTemp||''},${h.costAmount}\n`; });
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute("download", `咖啡ERP_重量版履歷_${new Date().toISOString().slice(0,10)}.csv`);
+                link.click();
+            };
+
+            const passkey = ref(localStorage.getItem('coffee_erp_passkey') || '');
+
+            const clearPasskey = () => {
+                passkey.value = '';
+                localStorage.removeItem('coffee_erp_passkey');
+                alert('已清除已儲存的 PASSKEY');
+            };
+
+            const syncToCloud = async () => {
+                if (!CLOUD_URL || CLOUD_URL.includes("請把部署")) return alert("請先配置 CLOUD_URL");
+                
+                if (!passkey.value) {
+                    const input = prompt("請輸入雲端同步 PASSKEY:");
+                    if (!input) return;
+                    passkey.value = input;
+                }
+
+                syncStatus.value = 'loading';
+                try {
+                    const payload = { 
+                        passkey: passkey.value,
+                        action: "saveAll", 
+                        beans: greenStock.value, 
+                        blends: blends.value, 
+                        history: history.value 
+                    };
+                    const res = await fetch(CLOUD_URL, { 
+                        method: "POST", 
+                        mode: "cors",
+                        headers: { "Content-Type": "text/plain;charset=utf-8" }, 
+                        body: JSON.stringify(payload) 
+                    });
+                    const json = await res.json();
+                    if (json.status === "success") { 
+                        localStorage.setItem('coffee_erp_passkey', passkey.value);
+                        syncStatus.value = 'success'; 
+                        alert("☁️ 資料已成功保存至雲端！"); 
+                    } else { 
+                        syncStatus.value = 'error'; 
+                        if (json.message === "Unauthorized") {
+                            localStorage.removeItem('coffee_erp_passkey');
+                            passkey.value = '';
+                            alert("⚠️ 密碼錯誤，請重新輸入");
+                        } else {
+                            alert("⚠️ 雲端儲存失敗：" + (json.message || "未知錯誤")); 
+                        }
+                    }
+                } catch (err) { syncStatus.value = 'error'; alert("🚨 連線失敗：" + err.message); }
+            };
+
+            const syncFromCloud = async () => {
+                if (!CLOUD_URL || CLOUD_URL.includes("請把部署")) return alert("請先配置 CLOUD_URL");
+                
+                if (!passkey.value) {
+                    const input = prompt("請輸入雲端同步 PASSKEY:");
+                    if (!input) return;
+                    passkey.value = input;
+                }
+
+                syncStatus.value = 'loading';
+                try {
+                    const url = `${CLOUD_URL}?action=getAll&passkey=${encodeURIComponent(passkey.value)}&_t=${new Date().getTime()}`;
+                    const res = await fetch(url, { method: "GET", mode: "cors" });
+                    const json = await res.json();
+                    
+                    if (json.status === "success") {
+                        localStorage.setItem('coffee_erp_passkey', passkey.value);
+                        greenStock.value = json.data.beans || []; 
+                        blends.value = json.data.blends || []; 
+                        history.value = json.data.history || [];
+                        triggerSave(); 
+                        syncStatus.value = 'success'; 
+                        alert("☁️ 已成功同步最新進度！");
+                    } else { 
+                        syncStatus.value = 'error'; 
+                        if (json.message === "Unauthorized") {
+                            localStorage.removeItem('coffee_erp_passkey');
+                            passkey.value = '';
+                            alert("⚠️ 密碼錯誤，請重新輸入");
+                        } else {
+                            alert("⚠️ 下載失敗：" + (json.message || "未知錯誤")); 
+                        }
+                    }
+                } catch (err) { syncStatus.value = 'error'; alert("🚨 讀取失敗：" + err.message); }
+            };
+
+            const changeStorageMode = (mode) => {
+                storageMode.value = mode; localStorage.setItem('coffee_erp_storageMode', mode);
+                if (mode === 'cloud' && confirm("是否立即從雲端同步進度？")) syncFromCloud();
+            };
+
+            const triggerSave = () => {
+                localStorage.setItem('coffee_erp_greenStock', JSON.stringify(greenStock.value));
+                localStorage.setItem('coffee_erp_blends', JSON.stringify(blends.value));
+                localStorage.setItem('coffee_erp_history', JSON.stringify(history.value));
+            };
+
+            const initSystem = () => {
+                const savedMode = localStorage.getItem('coffee_erp_storageMode'); if (savedMode) storageMode.value = savedMode;
+                const lsStock = localStorage.getItem('coffee_erp_greenStock'); const lsBlends = localStorage.getItem('coffee_erp_blends'); const lsHistory = localStorage.getItem('coffee_erp_history');
+                if (lsStock) greenStock.value = JSON.parse(lsStock); if (lsBlends) blends.value = JSON.parse(lsBlends); if (lsHistory) history.value = JSON.parse(lsHistory);
+            };
+
+            initSystem();
+
+            return {
+                fileInput, triggerFileInput, exportBackup, importBackup, greenStock, blends, history, newBean, newBlend, form, previewCostDetails,
+                addBean, deleteBean, addBlend, deleteBlend, executeBaking, deleteHistory, clearHistory, exportCSV, storageMode, syncStatus, changeStorageMode, syncFromCloud, syncToCloud, clearPasskey
+            };
+        }
+    }).mount('#app');
+</script>
+
+</body>
+</html>

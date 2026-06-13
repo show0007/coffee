@@ -1,0 +1,120 @@
+/**
+ * 精品咖啡烘焙 ERP 旗艦版 - 後端資料對接程式碼 (升級版：支援 PASSKEY 安全驗證)
+ */
+
+// !!! 請務必將此處改為你自己設定的複雜密碼 !!!
+const PASSKEY = "YourSecretPassword123"; 
+
+const SHEET_BEANS = "生豆庫存";
+const SHEET_BLENDS = "重量配方";
+const SHEET_HISTORY = "歷史履歷";
+
+/**
+ * 安全驗證輔助函式
+ */
+function isAuthorized(data) {
+  return data && data.passkey === PASSKEY;
+}
+
+/**
+ * 處理前端的 GET 請求 (下載資料)
+ */
+function doGet(e) {
+  try {
+    // 簡單檢查：GET 請求也需要 passkey，防止網址外流被讀取
+    if (e.parameter.passkey !== PASSKEY) {
+        return textOutput({ status: "error", message: "Unauthorized" });
+    }
+
+    const action = e.parameter.action;
+    if (action === "getAll") {
+      const data = {
+        beans: readSheetToJSON(SHEET_BEANS),
+        blends: readSheetToJSON(SHEET_BLENDS),
+        history: readSheetToJSON(SHEET_HISTORY)
+      };
+      return textOutput({ status: "success", data: data });
+    }
+    return textOutput({ status: "error", message: "未知的 action 指令" });
+  } catch (err) {
+    return textOutput({ status: "error", message: err.toString() });
+  }
+}
+
+/**
+ * 處理前端的 POST 請求 (升級版：加入 PASSKEY 安全檢查)
+ */
+function doPost(e) {
+  try {
+    const rawData = e.postData.contents;
+    if (!rawData) return textOutput({ status: "error", message: "未偵測到資料" });
+    
+    const payload = JSON.parse(rawData);
+    
+    // 安全檢查：若密碼錯誤則拒絕執行
+    if (!isAuthorized(payload)) {
+      return textOutput({ status: "error", message: "Unauthorized" });
+    }
+    
+    const action = payload.action;
+    
+    if (action === "saveAll") {
+      if (payload.beans) saveToSheet(SHEET_BEANS, payload.beans);
+      if (payload.blends) saveToSheet(SHEET_BLENDS, payload.blends);
+      if (payload.history) saveToSheet(SHEET_HISTORY, payload.history);
+      
+      return textOutput({ status: "success", message: "雲端資料同步更新成功" });
+    }
+    
+    return textOutput({ status: "error", message: "未知的 POST action 指令" });
+  } catch (err) {
+    return textOutput({ status: "error", message: "後端處理失敗: " + err.toString() });
+  }
+}
+
+// ==========================================
+// 核心工具函式
+// ==========================================
+
+function saveToSheet(sheetName, dataArray) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) { sheet = ss.insertSheet(sheetName); } else { sheet.clear(); }
+  if (dataArray.length === 0) return;
+  const headers = Object.keys(dataArray[0]);
+  sheet.appendRow(headers);
+  const rows = dataArray.map(obj => {
+    return headers.map(key => {
+      const val = obj[key];
+      if (typeof val === 'object' && val !== null) return JSON.stringify(val); 
+      return val;
+    });
+  });
+  sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+}
+
+function readSheetToJSON(sheetName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return []; 
+  const headers = values[0];
+  const rows = values.slice(1);
+  return rows.map(row => {
+    let obj = {};
+    headers.forEach((header, colIdx) => {
+      let val = row[colIdx];
+      if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
+        try { val = JSON.parse(val); } catch(e) {}
+      }
+      obj[header] = val;
+    });
+    return obj;
+  });
+}
+
+function textOutput(object) {
+  return ContentService.createTextOutput(JSON.stringify(object))
+    .setMimeType(ContentService.MimeType.JSON);
+}
