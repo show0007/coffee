@@ -669,10 +669,41 @@
                 localStorage.setItem('coffee_erp_history', JSON.stringify(history.value));
             };
 
-            const initSystem = () => {
-                const savedMode = localStorage.getItem('coffee_erp_storageMode'); if (savedMode) storageMode.value = savedMode;
-                const lsStock = localStorage.getItem('coffee_erp_greenStock'); const lsBlends = localStorage.getItem('coffee_erp_blends'); const lsHistory = localStorage.getItem('coffee_erp_history');
-                if (lsStock) greenStock.value = JSON.parse(lsStock); if (lsBlends) blends.value = JSON.parse(lsBlends); if (lsHistory) history.value = JSON.parse(lsHistory);
+            const initSystem = async () => {
+                const savedMode = localStorage.getItem('coffee_erp_storageMode'); 
+                if (savedMode) storageMode.value = savedMode;
+                
+                // 1. 先讀取本機基礎資料，保證網頁能先顯示
+                const lsStock = localStorage.getItem('coffee_erp_greenStock'); 
+                const lsBlends = localStorage.getItem('coffee_erp_blends'); 
+                const lsHistory = localStorage.getItem('coffee_erp_history');
+                if (lsStock) greenStock.value = JSON.parse(lsStock); 
+                if (lsBlends) blends.value = JSON.parse(lsBlends); 
+                if (lsHistory) history.value = JSON.parse(lsHistory);
+
+                // 2. 如果之前是雲端模式，且有密碼，嘗試自動同步
+                if (storageMode.value === 'cloud' && passkey.value) {
+                    syncStatus.value = 'loading';
+                    try {
+                        const url = `${CLOUD_URL}?action=getAll&passkey=${encodeURIComponent(passkey.value)}&_t=${new Date().getTime()}`;
+                        const res = await fetch(url, { method: "GET", mode: "cors" });
+                        const json = await res.json();
+                        
+                        if (json.status === "success") {
+                            greenStock.value = json.data.beans || []; 
+                            blends.value = json.data.blends || []; 
+                            history.value = json.data.history || [];
+                            triggerSave(); 
+                            syncStatus.value = 'success'; 
+                            console.log("☁️ 雲端資料同步成功");
+                        } else {
+                            throw new Error("無法從雲端取得資料");
+                        }
+                    } catch (err) {
+                        syncStatus.value = 'error';
+                        console.error("🚨 雲端同步失敗，改用本機資料:", err);
+                    }
+                }
             };
 
             initSystem();
